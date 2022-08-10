@@ -15,7 +15,7 @@ A = tokenizer.tokenize(open('C:/Users/Dingge/Doctoral_projets/Pytorch/msgA.txt')
 B = tokenizer.tokenize(open('C:/Users/Dingge/Doctoral_projets/Pytorch/msgB.txt', encoding="utf8").read())
 C = tokenizer.tokenize(open('C:/Users/Dingge/Doctoral_projets/Pytorch/msgC.txt').read())
 D = tokenizer.tokenize(open('C:/Users/Dingge/Doctoral_projets/Pytorch/msgD.txt').read())
-cora = tokenizer.tokenize(open("data/Cora_enrich/texts.txt").read())
+# cora = tokenizer.tokenize(open("data/Cora_enrich/texts.txt").read())
 
 # Turning everything to lowercase
 A = [idx.lower() for idx in A]
@@ -42,7 +42,7 @@ dct.save("C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/dic_cora.pkl")
 # creating a dictionary from the above texts
 corpus = [A,B,A]
 dct = Dictionary(corpus)
-dct.save("C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/dic_BBC_1.pkl")
+dct.save("C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/dic_BBC_1_N=300.pkl")
 # dct[72]
 # dct.token2id["baby"]
 # dct = pickle.load(open('dic_BBC.pkl','rb'))
@@ -69,6 +69,8 @@ def create_simu1(N, K):
     # N=5
     c = np.random.multinomial(1, Rho, size=N)
     c = np.argmax(c, axis=1)
+
+    # c = np.loadtxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_SBM_1_N=300.txt', dtype=int)
 
     A = np.zeros((N, N))
     for i in range(N-1):
@@ -105,13 +107,13 @@ def create_simu1(N, K):
             label_text.append(0)  # A
 
     # Saving data
-    with open('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/sim_docs_SBM_1', 'wb') as fp:
+    with open('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/sim_docs_SBM_1_N=300', 'wb') as fp:
         pickle.dump(docs, fp)
-    np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/adj_SBM_1.txt', A)
-    np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_SBM_1.txt', c)
-    np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_text_SBM_1.txt', label_text)
+    np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/adj_SBM_1_N=300.txt', A)
+    np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_SBM_1_N=300.txt', c)
+    np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_text_SBM_1_N=300.txt', label_text)
 
-create_simu1(900, 3)
+create_simu1(300, 3)
 
 with open ('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/sim_docs_SBM_1', 'rb') as fp:
     list = pickle.load(fp)
@@ -147,6 +149,8 @@ def create_simu2(N, K):
     # N=5
     c = np.random.multinomial(1, Rho, size=N)
     c = np.argmax(c, axis=1)
+
+    c = np.loadtxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_SBM_2.txt', dtype=int)
 
     A = np.zeros((N, N))
     for i in range(N-1):
@@ -204,8 +208,8 @@ dctn3 = dct3.token2id
 def create_simu3(N, K):
 
     Pi = np.zeros((K, K))
-    a = 0.8
-    b = 0.2
+    a = 0.7
+    b = 0.3
 
     Pi[0,0] = a
     Pi[0,1] = b
@@ -217,10 +221,12 @@ def create_simu3(N, K):
     Pi[2,1] = b
     Pi[2,2] = a
 
-    Rho = [0.3, 0.3, 0.4]
-    # N=5
-    c = np.random.multinomial(1, Rho, size=N)
-    c = np.argmax(c, axis=1)
+    # Rho = [0.3, 0.3, 0.4]
+    # # N=5
+    # c = np.random.multinomial(1, Rho, size=N)
+    # c = np.argmax(c, axis=1)
+
+    c = np.loadtxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_SBM_3.txt', dtype=int)
 
     A = np.zeros((N, N))
     for i in range(N-1):
@@ -228,29 +234,39 @@ def create_simu3(N, K):
             prob = Pi[c[i], c[j]]
             A[i,j] = A[j,i] = bernoulli.rvs(prob, loc=0, size=1)
 
-    docs = []
-    for i in range(N):
-        pos = c[i]
-        msg = []
-        Nw = int(np.random.normal(100, 5))  # number of words picked in each text
-        sampled_pos = sample(range(len(corpus3[pos])), Nw)
-        for idz in sampled_pos:
-            msg.append(corpus3[pos][idz])
-        docs.append(msg)
+    # docs = []
+    # for i in range(N):
+    #     pos = c[i]
+    #     msg = []
+    #     Nw = int(np.random.normal(100, 5))  # number of words picked in each text
+    #     sampled_pos = sample(range(len(corpus3[pos])), Nw)
+    #     for idz in sampled_pos:
+    #         msg.append(corpus3[pos][idz])
+    #     docs.append(msg)
 
-    label = []
-    for idx in range(len(c)):
-        if c[idx] == 0:
-            label.append('#7294d4')
-        elif c[idx] == 1:
-            label.append('#fdc765')
-        else:
-            label.append('#869f82')
+    # label = []
+    # for idx in range(len(c)):
+    #     if c[idx] == 0:
+    #         label.append('#7294d4')
+    #     elif c[idx] == 1:
+    #         label.append('#fdc765')
+    #     else:
+    #         label.append('#869f82')
+    #
+    # label_text = []
+    # for idx in range(len(c)):
+    #     if c[idx] == 0:
+    #         label_text.append(0)  # A
+    #     elif c[idx] == 1:
+    #         label_text.append(1)  # B
+    #     else:
+    #         label_text.append(0)  # A
 
     # Saving data
-    with open('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/sim_docs_SBM_3', 'wb') as fp:
-        pickle.dump(docs, fp)
-    np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/adj_SBM_3.txt', A)
-    np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_SBM_3.txt', c)
+    # with open('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/sim_docs_SBM_3', 'wb') as fp:
+    #     pickle.dump(docs, fp)
+    np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/adj_SBM_3_pi=0.7.txt', A)
+    # np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_SBM_3.txt', c)
+    # np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_text_SBM_3.txt', label_text)
 
 create_simu3(900, 3)

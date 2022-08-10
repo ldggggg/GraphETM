@@ -149,3 +149,38 @@ plt.plot(save_loss[7], color='blue')
 plt.title("Training ari kmeans")
 
 f.savefig(path + "/tmp/loss_acc_ari_new.pdf", bbox_inches='tight')
+
+
+######################################## SBM ##############################################
+from input_data import *
+from sklearn.metrics.cluster import adjusted_rand_score
+
+# features, adj, labels, model_embeddings = load_data('simu1')
+adj = np.loadtxt("data/SBM/adj_SBM_1_pi=0.6.txt")
+labels = np.loadtxt("data/SBM/label_SBM_1.txt")
+
+from sparsebm import SBM
+number_of_clusters = 3
+# A number of classes must be specify. Otherwise see model selection.
+model1 = SBM(number_of_clusters, n_init=100)
+model1.fit(adj, symmetric=True)
+# print("Labels:", model.labels)
+print("ARI_SBM:", adjusted_rand_score(labels, model1.labels))
+
+# from SBM_package.src import SBM
+# elbo, tau, tau_init, count, time_list = SBM.sbm(adj, 3, algo='vbem', type_init='kmeans')
+# c = np.argmax(tau, axis=1)
+# print("ARI_SBM_init_kmeans:", adjusted_rand_score(labels, c))
+
+
+######################### plot simplex #######################
+import plotly.express as px
+import matplotlib.pyplot as plt
+
+import plotly.io as pio
+pio.renderers
+pio.renderers.default = "browser"
+
+df = px.data.election()
+fig = px.scatter_ternary(df, a="Joly", b="Coderre", c="Bergeron")
+fig.show()

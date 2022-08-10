@@ -90,7 +90,7 @@ def load_data(dataset):
         # documents = [" ".join(x) for x in docs]
         # embeddings_mapping = embedding.create_word2vec_embedding_from_dataset(documents)
         # # Save embeddings for rho
-        # with open('data/SBM/word2vec_SBM_2.pkl', 'wb') as fout:
+        # with open('data/SBM/word2vec_SBM_1.pkl', 'wb') as fout:
         #     pickle.dump((embeddings_mapping), fout)
 
         with open('data/SBM/word2vec_SBM_2.pkl', 'rb') as f:

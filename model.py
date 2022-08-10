@@ -147,6 +147,7 @@ class GETM(nn.Module):
     def pretrain(self, X, adj_label, labels):
         if not os.path.exists('./pretrain_model.pk'):
 
+            # when simu1: pi=0.6: weight_decay=1e-4; when simu1: pi>0.6: no weight_decay
             optimizer = Adam(itertools.chain(self.encoder.parameters(), self.decoder1.parameters()), lr=args.pre_lr)
 
             store_pre_loss = torch.zeros(args.pre_epoch)
@@ -166,7 +167,8 @@ class GETM(nn.Module):
                     print("Epoch:", '%04d' % (epoch + 1), "train_loss=", "{:.5f}".format(loss.item()))
                 store_pre_loss[epoch] = torch.Tensor.item(loss)
 
-            Z = z.detach().cpu().numpy()
+            with torch.no_grad():
+                Z = z.detach().cpu().numpy()
 
             # plot loss
             # f, ax = plt.subplots(1, figsize=(15, 10))
@@ -179,13 +181,13 @@ class GETM(nn.Module):
             labelk = kmeans.labels_
             print("ARI_kmeans:", adjusted_rand_score(labels, labelk))
 
-            self.gamma.fill_(1e-16)
+            self.gamma.fill_(1e-10)
             seq = np.arange(0, len(self.gamma))
             positions = np.vstack((seq, labelk))
             self.gamma[positions] = 1.
-            print(self.gamma)
-            #
-            # self.mu_k.data = torch.from_numpy(kmeans.cluster_centers_).float().to(device)
+            # print(self.gamma)
+
+            self.mu_k.data = torch.from_numpy(kmeans.cluster_centers_).float().to(device)  # need in simu2 !
 
             ################## gmm #################
             # gmm = GaussianMixture(n_components=args.num_clusters, covariance_type='diag')
@@ -212,8 +214,16 @@ class GETM(nn.Module):
                     labelC.append('lightblue')
                 elif labelk[idx] == 1:
                     labelC.append('lightgreen')
-                else:
+                elif labelk[idx] == 2:
                     labelC.append('yellow')
+                elif labelk[idx] == 3:
+                    labelC.append('pink')
+                elif labelk[idx] == 4:
+                    labelC.append('purple')
+                elif labelk[idx] == 5:
+                    labelC.append('red')
+                else:
+                    labelC.append('orange')
             f, ax = plt.subplots(1, figsize=(15, 10))
             ax.scatter(Z[:, 0], Z[:, 1], color=labelC)
             plt.show()

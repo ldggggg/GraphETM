@@ -88,16 +88,17 @@ model.pretrain(features, adj_label, labels)  # pretraining
 
 # set different lr for two parts
 grouped_parameters = [
-                {"params": model.encoder.parameters(), 'lr': 5e-3},
-                {"params": model.a, 'lr': 5e-3},
-                {"params": model.decoder1.parameters(), 'lr': 5e-3},
-                {"params": model.w1.parameters(), 'lr': 5e-3},
-                {"params": model.decoder2.parameters(), 'lr': 0.02},
-                {"params": model.alpha.parameters(), 'lr': 0.02},
-                {"params": model.w2.parameters(), 'lr': 0.02},
-            ]
-optimizer = Adam(grouped_parameters, lr=args.learning_rate)  # model.parameters
+                {"params": model.encoder.parameters(), 'lr': 1e-3},
+                {"params": model.a, 'lr': 1e-3},
+                {"params": model.decoder1.parameters(), 'lr': 1e-3},
+                {"params": model.w1.parameters(), 'lr': 1e-3},
+                {"params": model.decoder2.parameters(), 'lr': 1e-2},
+                {"params": model.alpha.parameters(), 'lr': 1e-2},
+                {"params": model.w2.parameters(), 'lr': 1e-2},
+            ]  # simu: 5e-3, 0.02; cora:1e-3, 0.01.
+optimizer = Adam(grouped_parameters, lr=args.learning_rate)  # model.parameters, weight_decay=1e-4
 # optimizer = Adam(model.parameters(), lr=args.learning_rate)
+lr_s = StepLR(optimizer, step_size=300, gamma=0.1)
 
 # store loss
 store_loss = torch.zeros(args.num_epoch).to(device)  # total loss
@@ -106,13 +107,15 @@ store_loss2 = torch.zeros(args.num_epoch).to(device)  # kl loss
 store_loss3 = torch.zeros(args.num_epoch).to(device)  # cluster loss
 store_loss4 = torch.zeros(args.num_epoch).to(device)  # text loss
 store_ari = []
+store_acc = []
 
 def ELBO_Loss(gamma, pi_k, mu_k, log_cov_k, mu_phi, log_cov_phi, A_pred, B_pred, P):
     # Graph reconstruction loss
     OO = adj_label.to_dense()*(torch.log((A_pred/(1. - A_pred)) + 1e-16)) + torch.log((1. - A_pred) + 1e-16)
     OO = OO.fill_diagonal_(0)
     OO = OO.to(device)
-    # loss1 = -torch.sum(OO) / args.num_points
+    # loss1 = -torch.sum(OO) / (args.num_points * args.num_points)
+    # print(OO.shape)
     loss1 = -OO.sum(1).mean()  # N ** 2 !
     # loss1 = F.binary_cross_entropy(A_pred.view(-1), adj_label.to_dense().view(-1))
 
@@ -129,33 +132,22 @@ def ELBO_Loss(gamma, pi_k, mu_k, log_cov_k, mu_phi, log_cov_phi, A_pred, B_pred,
         KL[:, k] = 0.5*temp.squeeze()
 
     # kl loss
-    # loss2 = (gamma * KL).sum(1) / args.num_points
-    ts = gamma * KL
-    # deal with nan value
-    # print(torch.any(torch.isnan(gamma * KL)))
-    # my_tensor_np = ts.cpu().numpy()
-    # my_tensor_np[np.isnan(my_tensor_np)] = 0.0
-    # ts.copy_(torch.from_numpy(my_tensor_np).cuda())
-    # print(torch.any(torch.isnan(ts)))
-
-    ts_sum = torch.sum(ts)
-    # my_sum_np = ts_sum.cpu().numpy()
-    # my_sum_np[np.isnan(my_sum_np)] = 0.0
-    # ts_sum.copy_(torch.from_numpy(my_sum_np).cuda())
-
-    loss2 = ts_sum / (args.num_points * args.num_clusters)
-    # print('1:', ts)
-    # print('2:', ts_sum)
-    # print('3',loss2)
+    loss2 = (gamma * KL).sum(1).mean()
+    # ts = gamma * KL
+    # ts_sum = torch.sum(ts)
+    # loss2 = ts_sum / (args.num_points * args.num_clusters)
 
     # clustering loss
     # print(pi_k)
     loss3 = (gamma * (torch.log(pi_k.unsqueeze(0)) - torch.log(gamma))).sum(1).mean()
+    # loss3 = torch.sum(gamma * (torch.log(pi_k.unsqueeze(0)) - torch.log(gamma))) / (args.num_points * args.num_clusters)
 
     # reconstruction text loss
+    # print(B_pred.shape)
     loss4 = -(B_pred * bow.to(device)).sum(1).mean()  # N * Q!
 
-    loss = loss1 + loss2 - loss3 + loss4  # total loss
+
+    loss = loss1 + loss2 - loss3 + loss4  # total loss, cora: loss4 * 0.01
 
     return loss, loss1, loss2, -loss3, loss4
 
@@ -181,6 +173,12 @@ def visu():
         ax.set_title('PCA result of embeddings Z of GETM (K='+str(args.num_clusters)+')', fontsize=18)
         plt.show()
         # f.savefig("C:/Users/Dingge/Desktop/results/emb_ARVGA.pdf", bbox_inches='tight')
+
+def get_acc(adj_rec, adj_label):
+    labels_all = adj_label.to_dense().view(-1).long()
+    preds_all = (adj_rec > 0.5).view(-1).long()
+    accuracy = (preds_all == labels_all).sum().float() / labels_all.size(0)
+    return accuracy
 
 #################################### train model ################################################
 begin = time.time()
@@ -215,11 +213,12 @@ for epoch in range(args.num_epoch):
                        log_cov_phi.detach().clone(),
                        pi_k, mu_k, log_cov_k, args.hidden2_dim)
 
-    pi_k = model.pi_k.data                    # pi_k should be a copy of model.pi_k
-    # print('3',pi_k, model.gamma)
-    log_cov_k = model.log_cov_k.data
-    mu_k = model.mu_k.data
-    gamma = model.gamma.data
+    with torch.no_grad():
+        pi_k = model.pi_k.data                    # pi_k should be a copy of model.pi_k
+        # print('3',pi_k, model.gamma)
+        log_cov_k = model.log_cov_k.data
+        mu_k = model.mu_k.data
+        gamma = model.gamma.data
     # calculate of ELBO loss
     optimizer.zero_grad()
     loss, loss1, loss2, loss3, loss4 = ELBO_Loss(gamma, pi_k, mu_k, log_cov_k,
@@ -230,6 +229,8 @@ for epoch in range(args.num_epoch):
     ################ update of GCN ############
     loss.backward()
     optimizer.step()
+    if epoch < 600:
+        lr_s.step()
 
     if (epoch + 1) % 1 == 0:
         print("Epoch:", '%04d' % (epoch + 1), "total_loss=", "{:.5f}".format(loss.item()),
@@ -256,10 +257,10 @@ for epoch in range(args.num_epoch):
         print('Unsupervised data without true labels (no ARI) !')
     else:
         store_ari.append(adjusted_rand_score(labels, torch.argmax(gamma, axis=1).cpu().numpy()))
+        store_acc.append(get_acc(A_pred, adj_label))
 
 end = time.time()
 print('training time ......................:', end-begin)
-
 
 ################################# plots to show results ###################################
 # plot train loss
@@ -289,6 +290,7 @@ plt.plot(store_ari, color='blue')
 plt.title("ARI")
 
 plt.show()
+f.savefig("data/result.pdf", bbox_inches='tight')
 
 print('Min loss:', torch.min(store_loss), 'K='+str(args.num_clusters))
 print('ARI_gamma:', adjusted_rand_score(labels, torch.argmax(gamma, axis=1).cpu().numpy()))
@@ -296,7 +298,7 @@ print('Topics:', get_topics(beta.cpu().data.numpy()))
 # print('Topic coherence:', get_topic_coherence(beta.cpu().data.numpy(), bow))
 
 # ARI with kmeans
-kmeans = KMeans(n_clusters=args.num_clusters).fit(eta.cpu().data.numpy())
+kmeans = KMeans(n_clusters=args.num_clusters).fit(model.encoder.mean.cpu().data.numpy())
 labelk = kmeans.labels_
 print("ARI_kmeans:", adjusted_rand_score(labels, labelk))
 
@@ -307,8 +309,16 @@ for idx in range(len(labels)):
         labelC.append('lightblue')
     elif labels[idx] == 1:
         labelC.append('lightgreen')
-    else:
+    elif labels[idx] == 2:
         labelC.append('orange')
+    elif labels[idx] == 3:
+        labelC.append('pink')
+    elif labels[idx] == 4:
+        labelC.append('purple')
+    elif labels[idx] == 5:
+        labelC.append('red')
+    else:
+        labelC.append('yellow')
 
 # visu of Z
 pca = PCA(n_components=2, svd_solver='full')
@@ -319,6 +329,7 @@ ax.scatter(out[:, 0], out[:, 1], color=labelC)
 ax.scatter(mean[:, 0], mean[:, 1], color='black', s=50)
 ax.set_title('PCA result of Z of GETM (K='+str(args.num_clusters)+')', fontsize=18)
 plt.show()
+f.savefig("data/emb_Z.pdf", bbox_inches='tight')
 
 # visu of eta
 pca = PCA(n_components=2, svd_solver='full')
@@ -327,40 +338,53 @@ f, ax = plt.subplots(1, figsize=(15, 10))
 ax.scatter(out1[:, 0], out1[:, 1], color=labelC)
 ax.set_title('PCA result of $\eta$ of GETM (K='+str(args.num_clusters)+')', fontsize=18)
 plt.show()
+f.savefig("data/emb_eta.pdf", bbox_inches='tight')
 
 # visu of theta 2d
-label_text = np.loadtxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_text_SBM_2.txt')
-labelC_text = []
-for idx in range(len(label_text)):
-    if label_text[idx] == 0:
-        labelC_text.append('pink')
-    elif label_text[idx] == 1:
-        labelC_text.append('purple')
-    else:
-        labelC_text.append('red')
-# pca2 = PCA(n_components=2, svd_solver='full')
-# out2 = pca2.fit_transform(theta.cpu().data.numpy())
+# label_text = np.loadtxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_text_SBM_1.txt')
+# labelC_text = []
+# for idx in range(len(label_text)):
+#     if label_text[idx] == 0:
+#         labelC_text.append('pink')
+#     elif label_text[idx] == 1:
+#         labelC_text.append('purple')
+#     else:
+#         labelC_text.append('red')
+# # pca2 = PCA(n_components=2, svd_solver='full')
+# # out2 = pca2.fit_transform(theta.cpu().data.numpy())
 out2 = theta.cpu().data.numpy()
-f, ax = plt.subplots(1, figsize=(15, 10))
-ax.scatter(out2[:, 0], out2[:, 1], color=labelC_text)
-ax.set_title('PCA result of $\\theta$ of GETM (T='+str(args.num_topics)+')', fontsize=18)
-plt.show()
+# f, ax = plt.subplots(1, figsize=(15, 10))
+# ax.scatter(out2[:, 0], out2[:, 1], color=labelC_text)
+# ax.set_title('PCA result of $\\theta$ of GETM (T='+str(args.num_topics)+')', fontsize=18)
+# plt.show()
+
+#### simplex ####
+# import pandas as pd
+# df = pd.DataFrame(out2, columns = ['A','B','C'])
+#
+# import plotly.express as px
+# import matplotlib.pyplot as plt
+# import plotly.io as pio
+# pio.renderers
+# pio.renderers.default = "browser"
+# fig = px.scatter_ternary(df, a="A", b="B", c="C")
+# fig.show()
 
 # visu of theta 3d
 from mpl_toolkits.mplot3d import Axes3D
 # pca = PCA(n_components=3)
 # out4 = pca.fit_transform(model.encoder.mean.cpu().data.numpy())
-ax = plt.figure(figsize=(16,10)).gca(projection='3d')
-ax.scatter(
-    xs=out2[:,0],
-    ys=out2[:,1],
-    zs=out2[:,2],
-    color=labelC_text
-)
-ax.set_xlabel('topic-one')
-ax.set_ylabel('topic-two')
-ax.set_zlabel('topic-three')
-plt.show()
+# ax = plt.figure(figsize=(16,10)).gca(projection='3d')
+# ax.scatter(
+#     xs=out2[:,0],
+#     ys=out2[:,1],
+#     zs=out2[:,2],
+#     color=labelC_text
+# )
+# ax.set_xlabel('topic-one')
+# ax.set_ylabel('topic-two')
+# ax.set_zlabel('topic-three')
+# plt.show()
 
 
 ########################### save data for visualisation in R ##################################

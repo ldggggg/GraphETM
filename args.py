@@ -2,7 +2,7 @@
 # Data selected from:
 # simulated data: 'simuA': LPCM; 'simuB': SBM; 'simuC': circle data;
 # real data: 'eveques'; 'cora'.
-dataset = 'simu2'
+dataset = 'cora'
 model = 'GETM'
 
 if dataset == 'simu1':  # scenario C
@@ -15,10 +15,10 @@ if dataset == 'simu1':  # scenario C
     num_topics = 2  # latent dimension of topics T
     rho_size = 300  # topic embedding size L
 
-    num_epoch = 600  # training epochs (simu2: 600, simu3: 800)
+    num_epoch = 600  # training epochs 600
     learning_rate = 5e-3
     pre_lr = 0.05
-    pre_epoch = 20  # (simu1, 2: 5, simu3: 20)
+    pre_epoch = 10
 
 elif dataset == 'simu2':  # scenario A
     num_points = 900  # number of nodes N
@@ -33,7 +33,7 @@ elif dataset == 'simu2':  # scenario A
     num_epoch = 1000  # training epochs (simu2: 600, simu3: 800)
     learning_rate = 5e-3
     pre_lr = 0.05
-    pre_epoch = 20  # (simu1, 2: 5, simu3: 20)
+    pre_epoch = 10
 
 elif dataset == 'simu3':  # scenario B
     num_points = 900  # number of nodes N
@@ -48,19 +48,19 @@ elif dataset == 'simu3':  # scenario B
     num_epoch = 600  # training epochs (simu2: 600, simu3: 800)
     learning_rate = 5e-3
     pre_lr = 0.05
-    pre_epoch = 20  # (simu1, 2: 5, simu3: 20)
+    pre_epoch = 20
 
-elif dataset == 'cora':
+elif dataset == 'cora':  # TODO: NAN LOSS !!!
     num_points = 2708  # number of nodes N
     vocab_size = 25955  # node features dimension
-    hidden1_dim = 128  # hidden layer dimension
-    hidden2_dim = 64  # latent dimension P
+    hidden1_dim = 64  # hidden layer dimension
+    hidden2_dim = 16  # latent dimension P
     num_clusters = 7  # number of clusters K
     g_hidden_dim = 16  # graph embedding size D
-    num_topics = 7  # number of latent topics T
+    num_topics = 16  # number of latent topics T
     rho_size = 300  # topic embedding size L
 
-    num_epoch = 600
-    learning_rate = 2e-3
+    num_epoch = 2000
+    learning_rate = 1e-3
     pre_lr = 0.01
-    pre_epoch = 100
+    pre_epoch = 20
