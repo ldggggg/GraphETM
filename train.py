@@ -14,6 +14,7 @@ from input_data import *
 from preprocessing import *
 import model
 import args
+from evaluation import eva
 
 # Train on CPU or GPU
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -24,18 +25,34 @@ device = torch.device('cuda:0')  # GPU
 # device = 'cpu'
 
 ##################### Load data ########################
-if args.dataset == 'cora' or args.dataset == 'simu1' or args.dataset == 'simu2' or args.dataset == 'simu3':
-    features, adj, labels, model_embeddings = load_data(args.dataset)
+if args.dataset == 'simu1' or args.dataset == 'simu2' or args.dataset == 'simu3':
+    features, adj, labels, model_embeddings, label_text, dct = load_data(args.dataset)
+elif args.dataset == 'cora':
+    features, adj, labels, model_embeddings, label_text, dct = load_data(args.dataset)
 
-    # # concatenate A with X
-    # mat = np.concatenate((adj, features), axis=1)
-    # mat = sp.csr_matrix(mat)
+# # concatenate A with X
+# mat = np.concatenate((adj, features), axis=1)
+# mat = sp.csr_matrix(mat)
 
-    adj = sp.csr_matrix(adj)
-    bow = torch.from_numpy(features)  # used to calculate loss4
-    # print(bow)
-    features = sp.csr_matrix(features)
-    embeddings = torch.from_numpy(model_embeddings).to(device)
+adj = sp.csr_matrix(adj)
+bow = torch.from_numpy(features)  # used to calculate loss4
+# print(bow)
+features = sp.csr_matrix(features)  # bow
+embeddings = torch.from_numpy(model_embeddings).to(device)
+
+# ############### SBM #################
+# from sparsebm import SBM
+# number_of_clusters = args.num_clusters
+# # A number of classes must be specify. Otherwise see model selection.
+# model1 = SBM(number_of_clusters, n_init=100)
+# model1.fit(adj.todense(), symmetric=True)
+# # print("Labels:", model.labels)
+# ari_sbm = adjusted_rand_score(labels, model1.labels)
+
+# from SBM_package.src import SBM
+# elbo, tau, tau_init, count, time_list = SBM.sbm(adj.todense(), args.num_clusters, algo='vbem', type_init='kmeans')
+# c = np.argmax(tau, axis=1)
+# print("ARI_SBM_init_kmeans:", adjusted_rand_score(labels, c))
 
 ##################### Some preprocessing ########################
 adj_norm = preprocess_graph(adj)  # normalize adjacency matrix
@@ -47,7 +64,14 @@ sums = torch.sqrt(torch.sum(bow ** 2, dim=1))
 normalize_bow = bow / sums.unsqueeze(1)
 # print(normalize_bow)
 normalize_bow = sp.csr_matrix(normalize_bow)
-features = sparse_to_tuple(normalize_bow.tocoo())
+features = sparse_to_tuple(normalize_bow.tocoo())  # normalized bow
+
+
+# # [A . WW^T]
+# features = sparse_to_tuple(features.tocoo())
+# W = np.dot(normalize_bow, normalize_bow.T)  # WW^T
+# mul = np.multiply(adj_norm.todense(), W)
+# adj_norm = sparse_to_tuple(sp.csr_matrix(mul).tocoo())
 
 #features = sparse_to_tuple(features.tocoo())
 adj_ori = sparse_to_tuple(adj)  # original adj
@@ -88,17 +112,18 @@ model.pretrain(features, adj_label, labels)  # pretraining
 
 # set different lr for two parts
 grouped_parameters = [
-                {"params": model.encoder.parameters(), 'lr': 1e-3},
-                {"params": model.a, 'lr': 1e-3},
-                {"params": model.decoder1.parameters(), 'lr': 1e-3},
-                {"params": model.w1.parameters(), 'lr': 1e-3},
-                {"params": model.decoder2.parameters(), 'lr': 1e-2},
-                {"params": model.alpha.parameters(), 'lr': 1e-2},
-                {"params": model.w2.parameters(), 'lr': 1e-2},
-            ]  # simu: 5e-3, 0.02; cora:1e-3, 0.01.
+                {"params": model.encoder.parameters(), 'lr': 5e-3},
+                {"params": model.a, 'lr': 5e-3},
+                {"params": model.decoder1.parameters(), 'lr': 5e-3},
+                {"params": model.w1.parameters(), 'lr': 5e-3},
+                {"params": model.decoder2.parameters(), 'lr': 0.01},
+                {"params": model.alpha.parameters(), 'lr': 0.01},
+                {"params": model.w2.parameters(), 'lr': 0.01},
+                # {"params": model.tau, 'lr': 5e-3},
+            ]  # simu: 5e-3, 0.02; cora:5e-3, 0.01.
 optimizer = Adam(grouped_parameters, lr=args.learning_rate)  # model.parameters, weight_decay=1e-4
 # optimizer = Adam(model.parameters(), lr=args.learning_rate)
-lr_s = StepLR(optimizer, step_size=300, gamma=0.1)
+lr_s = StepLR(optimizer, step_size=50, gamma=0.1)  # 100 for cora, 50 when g_dim=128. 100 for simu.
 
 # store loss
 store_loss = torch.zeros(args.num_epoch).to(device)  # total loss
@@ -120,7 +145,7 @@ def ELBO_Loss(gamma, pi_k, mu_k, log_cov_k, mu_phi, log_cov_phi, A_pred, B_pred,
     # loss1 = F.binary_cross_entropy(A_pred.view(-1), adj_label.to_dense().view(-1))
 
     # KL divergence
-    det = 1e-10
+    det = 1e-16
     KL = torch.zeros((args.num_points, args.num_clusters))  # N * K
     KL = KL.to(device)
     for k in range(args.num_clusters):
@@ -184,6 +209,7 @@ def get_acc(adj_rec, adj_label):
 begin = time.time()
 for epoch in range(args.num_epoch):
     t = time.time()
+
     # get latent embeddings
     mu_phi, log_cov_phi, z = model.encoder(features)  # features
 
@@ -196,29 +222,31 @@ for epoch in range(args.num_epoch):
     delta, theta = model.get_theta(z)
     B_pred = model.decoder2(theta, beta)
 
-    # if epoch < 1 or (epoch + 1) % 1 == 0:
-    ################# update pi_k, mu_k and log_cov_k ###################
-    # print('1:',model.pi_k, model.gamma)
-    gamma = model.gamma.data
-    model.update_others(mu_phi.detach().clone(),
-                        log_cov_phi.detach().clone(),
-                        gamma, args.hidden2_dim)
-
-    # update gamma
-    pi_k = model.pi_k.data
-    # print('2',pi_k, model.gamma)
-    log_cov_k = model.log_cov_k.data
-    mu_k = model.mu_k.data
-    model.update_gamma(mu_phi.detach().clone(),
-                       log_cov_phi.detach().clone(),
-                       pi_k, mu_k, log_cov_k, args.hidden2_dim)
-
     with torch.no_grad():
+        # if epoch < 1 or (epoch + 1) % 1 == 0:
+        ################# update pi_k, mu_k and log_cov_k ###################
+        # print('1:',model.pi_k, model.gamma)
+        gamma = model.gamma.data
+        model.update_others(mu_phi.detach().clone(),
+                            log_cov_phi.detach().clone(),
+                            gamma, args.hidden2_dim)
+
+        # update gamma
+        pi_k = model.pi_k.data
+        # print('2',pi_k, model.gamma)
+        log_cov_k = model.log_cov_k.data
+        mu_k = model.mu_k.data
+        model.update_gamma(mu_phi.detach().clone(),
+                           log_cov_phi.detach().clone(),
+                           pi_k, mu_k, log_cov_k, args.hidden2_dim)
+
+    # with torch.no_grad():
         pi_k = model.pi_k.data                    # pi_k should be a copy of model.pi_k
         # print('3',pi_k, model.gamma)
         log_cov_k = model.log_cov_k.data
         mu_k = model.mu_k.data
         gamma = model.gamma.data
+
     # calculate of ELBO loss
     optimizer.zero_grad()
     loss, loss1, loss2, loss3, loss4 = ELBO_Loss(gamma, pi_k, mu_k, log_cov_k,
@@ -229,10 +257,11 @@ for epoch in range(args.num_epoch):
     ################ update of GCN ############
     loss.backward()
     optimizer.step()
-    if epoch < 600:
-        lr_s.step()
+    if epoch < 100:  # 100 when g_dim=128
+        lr_s.step()  # need in simu3.
 
     if (epoch + 1) % 1 == 0:
+        eva(labels, torch.argmax(gamma, axis=1).cpu().numpy(), epoch)
         print("Epoch:", '%04d' % (epoch + 1), "total_loss=", "{:.5f}".format(loss.item()),
               "reconstruct_graph_loss=", "{:.5f}".format(loss1.item()), "kl_loss=", "{:.5f}".format(loss2.item()),
               "cluster_loss=", "{:.5f}".format(loss3.item()), "reconstruct_text_loss=", "{:.5f}".format(loss4.item()),
@@ -257,7 +286,7 @@ for epoch in range(args.num_epoch):
         print('Unsupervised data without true labels (no ARI) !')
     else:
         store_ari.append(adjusted_rand_score(labels, torch.argmax(gamma, axis=1).cpu().numpy()))
-        store_acc.append(get_acc(A_pred, adj_label))
+        store_acc.append(get_acc(A_pred, adj_label).cpu().data.numpy())
 
 end = time.time()
 print('training time ......................:', end-begin)
@@ -265,38 +294,43 @@ print('training time ......................:', end-begin)
 ################################# plots to show results ###################################
 # plot train loss
 f, ax = plt.subplots(1, figsize=(15, 10))
-plt.subplot(231)
+plt.subplot(221)
 plt.plot(store_loss1.cpu().data.numpy(), color='red')
 plt.title("Reconstruction graph loss")
 
-plt.subplot(232)
-plt.plot(store_loss2.cpu().data.numpy(), color='red')
-plt.title("KL loss")
+# plt.subplot(242)
+# plt.plot(store_loss2.cpu().data.numpy(), color='red')
+# plt.title("KL loss")
+#
+# plt.subplot(243)
+# plt.plot(store_loss3.cpu().data.numpy(), color='red')
+# plt.title("Cluster loss")
 
-plt.subplot(233)
-plt.plot(store_loss3.cpu().data.numpy(), color='red')
-plt.title("Cluster loss")
-
-plt.subplot(234)
+plt.subplot(222)
 plt.plot(store_loss4.cpu().data.numpy(), color='red')
 plt.title("Recontruction text loss")
 
-plt.subplot(235)
+plt.subplot(223)
 plt.plot(store_loss.cpu().data.numpy(), color='red')
 plt.title("Training loss in total")
 
-plt.subplot(236)
+plt.subplot(224)
 plt.plot(store_ari, color='blue')
-plt.title("ARI")
+plt.title("ARI for clustering")
+
+# plt.subplot(247)
+# plt.plot(store_acc, color='blue')
+# plt.title("ACC")
 
 plt.show()
-f.savefig("data/result.pdf", bbox_inches='tight')
+# f.savefig("data/loss_sc.c.pdf", bbox_inches='tight')
 
-print('Min loss:', torch.min(store_loss), 'K='+str(args.num_clusters))
+print('Min loss:', torch.min(store_loss), 'K='+str(args.num_clusters), 'T='+str(args.num_topics))
+# print('Max ACC:', max(store_acc))
 print('ARI_gamma:', adjusted_rand_score(labels, torch.argmax(gamma, axis=1).cpu().numpy()))
-print('Topics:', get_topics(beta.cpu().data.numpy()))
+# print('Topics:', get_topics(beta.cpu().data.numpy(), dct))
 # print('Topic coherence:', get_topic_coherence(beta.cpu().data.numpy(), bow))
-
+# print("ARI_SBM:", ari_sbm)
 # ARI with kmeans
 kmeans = KMeans(n_clusters=args.num_clusters).fit(model.encoder.mean.cpu().data.numpy())
 labelk = kmeans.labels_
@@ -304,44 +338,48 @@ print("ARI_kmeans:", adjusted_rand_score(labels, labelk))
 
 # visu
 labelC = []
-for idx in range(len(labels)):
-    if labels[idx] == 0:
+gamma = model.gamma.cpu().data.numpy()
+pred_labels = np.argmax(gamma, axis=1)
+for idx in range(len(pred_labels)):
+    if pred_labels[idx] == 0:
         labelC.append('lightblue')
-    elif labels[idx] == 1:
+    elif pred_labels[idx] == 1:
         labelC.append('lightgreen')
-    elif labels[idx] == 2:
+    elif pred_labels[idx] == 2:
         labelC.append('orange')
-    elif labels[idx] == 3:
+    elif pred_labels[idx] == 3:
         labelC.append('pink')
-    elif labels[idx] == 4:
+    elif pred_labels[idx] == 4:
         labelC.append('purple')
-    elif labels[idx] == 5:
+    elif pred_labels[idx] == 5:
         labelC.append('red')
     else:
         labelC.append('yellow')
 
-# visu of Z
-pca = PCA(n_components=2, svd_solver='full')
-out = pca.fit_transform(model.encoder.mean.cpu().data.numpy())
-mean = pca.fit_transform(model.mu_k.cpu().data.numpy())
-f, ax = plt.subplots(1, figsize=(15, 10))
-ax.scatter(out[:, 0], out[:, 1], color=labelC)
-ax.scatter(mean[:, 0], mean[:, 1], color='black', s=50)
-ax.set_title('PCA result of Z of GETM (K='+str(args.num_clusters)+')', fontsize=18)
-plt.show()
-f.savefig("data/emb_Z.pdf", bbox_inches='tight')
+# # visu of Z
+# pca = PCA(n_components=2, svd_solver='full')
+# pca.fit(model.encoder.mean.cpu().data.numpy())
+# out_Z = pca.transform(model.encoder.mean.cpu().data.numpy())
+# out_mu = pca.transform(model.mu_k.cpu().data.numpy())
+# f, ax = plt.subplots(1, figsize=(15, 10))
+# ax.scatter(out_Z[:, 0], out_Z[:, 1], color=labelC)
+# ax.scatter(out_mu[:, 0], out_mu[:, 1], color='black', s=50)
+# ax.set_title('PCA result of Z of GETM (K='+str(args.num_clusters)+')', fontsize=18)
+# plt.show()
+# # f.savefig("data/emb_Z_sc.c.pdf", bbox_inches='tight')
+#
+# # visu of eta
+# pca = PCA(n_components=2, svd_solver='full')
+# out_eta = pca.fit_transform(eta.cpu().data.numpy())
+# # out_eta = pca.transform(eta.cpu().data.numpy())
+# f, ax = plt.subplots(1, figsize=(15, 10))
+# ax.scatter(out_eta[:, 0], out_eta[:, 1], color=labelC)
+# ax.set_title('PCA result of $\eta$ of GETM (K='+str(args.num_clusters)+')', fontsize=18)
+# plt.show()
+# # f.savefig("data/emb_eta_sc.c.pdf", bbox_inches='tight')
 
-# visu of eta
-pca = PCA(n_components=2, svd_solver='full')
-out1 = pca.fit_transform(eta.cpu().data.numpy())
-f, ax = plt.subplots(1, figsize=(15, 10))
-ax.scatter(out1[:, 0], out1[:, 1], color=labelC)
-ax.set_title('PCA result of $\eta$ of GETM (K='+str(args.num_clusters)+')', fontsize=18)
-plt.show()
-f.savefig("data/emb_eta.pdf", bbox_inches='tight')
-
-# visu of theta 2d
-# label_text = np.loadtxt('C:/Users/Dingge/Documents/GitHub/GETM/data/SBM/label_text_SBM_1.txt')
+# # visu of theta 2d
+# label_text = np.loadtxt('data/SBM/label_text_SBM_1.txt')
 # labelC_text = []
 # for idx in range(len(label_text)):
 #     if label_text[idx] == 0:
@@ -350,30 +388,41 @@ f.savefig("data/emb_eta.pdf", bbox_inches='tight')
 #         labelC_text.append('purple')
 #     else:
 #         labelC_text.append('red')
-# # pca2 = PCA(n_components=2, svd_solver='full')
-# # out2 = pca2.fit_transform(theta.cpu().data.numpy())
-out2 = theta.cpu().data.numpy()
+# pca2 = PCA(n_components=2, svd_solver='full')
+# out2 = pca2.fit_transform(theta.cpu().data.numpy())
+# # out2 = theta.cpu().data.numpy()
 # f, ax = plt.subplots(1, figsize=(15, 10))
-# ax.scatter(out2[:, 0], out2[:, 1], color=labelC_text)
-# ax.set_title('PCA result of $\\theta$ of GETM (T='+str(args.num_topics)+')', fontsize=18)
+# ax.scatter(out2[:, 0], out2[:, 1], color=labelC)
+# ax.set_title('visualisation of $\\theta$ of GETM (T='+str(args.num_topics)+')', fontsize=18)
 # plt.show()
+
+# the histogram of the data
+# n, bins, patches = plt.hist(out2[:, 1], 50, density=True, facecolor='g', alpha=0.75)
+# # plt.xlabel('Topics')
+# # plt.ylabel('Probability')
+# plt.title('visualisation of $\\theta$ of GETM (T='+str(args.num_topics)+')', fontsize=18)
+# # plt.text(60, .025, r'$\mu=100,\ \sigma=15$')
+# # plt.xlim(40, 160)
+# # plt.ylim(0, 0.03)
+# plt.grid(True)
+# plt.show()
+# # f.savefig("data/hist_theta_sc.c.pdf", bbox_inches='tight')
 
 #### simplex ####
 # import pandas as pd
-# df = pd.DataFrame(out2, columns = ['A','B','C'])
+# df = pd.DataFrame(out2, columns = ['Topic1','Topic2','Topic3'])
 #
 # import plotly.express as px
 # import matplotlib.pyplot as plt
 # import plotly.io as pio
 # pio.renderers
 # pio.renderers.default = "browser"
-# fig = px.scatter_ternary(df, a="A", b="B", c="C")
+# fig = px.scatter_ternary(df, a="Topic1", b="Topic2", c="Topic3")
 # fig.show()
 
 # visu of theta 3d
-from mpl_toolkits.mplot3d import Axes3D
+# from mpl_toolkits.mplot3d import Axes3D
 # pca = PCA(n_components=3)
-# out4 = pca.fit_transform(model.encoder.mean.cpu().data.numpy())
 # ax = plt.figure(figsize=(16,10)).gca(projection='3d')
 # ax.scatter(
 #     xs=out2[:,0],
@@ -388,21 +437,68 @@ from mpl_toolkits.mplot3d import Axes3D
 
 
 ########################### save data for visualisation in R ##################################
+with torch.no_grad():
+    mu, log_cov, z = model.encoder(features)
+    mean = z.cpu().data.numpy()
+    # mean = model.encoder.mean.cpu().data.numpy()
+    gamma = model.gamma.cpu().data.numpy()
+    pred_labels = np.argmax(gamma, axis=1)
+    eta = model.get_eta(z).cpu().data.numpy()
+    delta, theta = model.get_theta(z)
+    delta = delta.cpu().data.numpy()
+    theta = theta.cpu().data.numpy()
+    beta = model.get_beta().cpu().data.numpy()
+
+#################### export to csv ######################
+# import pandas as pd
+# df = pd.DataFrame(np.hstack([mean, pred_labels.reshape((-1,1))]))
+# df.to_csv('C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/cora_data_Z_d=128_k='+str(args.num_clusters)+'.csv', header=False)
+#
+# df2 = pd.DataFrame(np.hstack([eta, pred_labels.reshape((-1,1))]))
+# df2.to_csv('C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/cora_data_eta_d=128_k='+str(args.num_clusters)+'.csv', header=False)
+#
+# df3 = pd.DataFrame(np.hstack([delta, pred_labels.reshape((-1,1))]))
+# df3.to_csv('C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/cora_data_delta_d=7_k='+str(args.num_clusters)+'.csv', header=False)
+
 # import csv
-# file = open('cora_data_A_k='+str(args.num_clusters)+'_p=16_'+str(args.use_nodes)+str(args.use_edges)+'.csv', "w")
+# file = open('C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/cora_data_Z_k='+str(args.num_clusters)+'.csv', "w")
 # writer = csv.writer(file)
-# mean = model.encoder.mean.cpu().data.numpy()
-# pred_labels = torch.argmax(gamma, axis=1).cpu().numpy()
 # for w in range(args.num_points):
 #     writer.writerow([w, mean[w][0],mean[w][1],mean[w][2],mean[w][3],mean[w][4],mean[w][5],mean[w][6],mean[w][7],
 #                      mean[w][8],mean[w][9],mean[w][10],mean[w][11],mean[w][12],mean[w][13],mean[w][14],mean[w][15], pred_labels[w]])  # mean[w][8],mean[w][9],mean[w][10],mean[w][11],mean[w][12],mean[w][13],mean[w][14],mean[w][15]
 # file.close()
+
+# file2 = open('C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/cora_data_eta_k='+str(args.num_clusters)+'.csv', "w")
+# writer2 = csv.writer(file2)
+# for w in range(args.num_points):
+#     writer2.writerow([w, eta[w][0],eta[w][1],eta[w][2],eta[w][3],eta[w][4],eta[w][5],eta[w][6],eta[w][7],
+#                      eta[w][8],eta[w][9],eta[w][10],eta[w][11],eta[w][12],eta[w][13],eta[w][14],eta[w][15], pred_labels[w]])
+# file2.close()
 #
-# from sklearn.decomposition import PCA
-# pca = PCA(n_components=2, svd_solver='full')
-# out = pca.fit_transform(mean)
-# np.savetxt('cora_pos_A_k='+str(args.num_clusters)+'_p=16_'+str(args.use_nodes)+str(args.use_edges)+'.txt', out)
+# file3 = open('C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/cora_data_delta_k='+str(args.num_clusters)+'.csv', "w")
+# writer3 = csv.writer(file3)
+# for w in range(args.num_points):
+#     writer3.writerow([w, delta[w][0],delta[w][1],delta[w][2],delta[w][3],delta[w][4],delta[w][5],delta[w][6], pred_labels[w]])
+# file3.close()
+
+# np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/cora_pos_Z_k='+str(args.num_clusters)+'_p=128.txt', out_Z)
+# np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/cora_cl_A_k='+str(args.num_clusters)+'_p=128.txt', pred_labels)
+# np.savetxt('C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/cora_mu_k='+str(args.num_clusters)+'_p=128.txt', out_mu)
+
+############################### confusion matrix ####################################
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
+# labels = np.loadtxt('C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/cora_labels_int.txt').astype(int)
+# pred_labels = np.loadtxt('C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/cora_cl_A_k=7_p=16.txt').astype(int)
+cf_m = confusion_matrix(pred_labels, labels)
+
+# import seaborn as sns
+# fig = plt.figure()
+# sns.heatmap(cf_m, annot=True, fmt='', cmap='Blues', xticklabels=['O1','O2','O3','O4','O5','O6','O7'],
+#             yticklabels=['N1','N2','N3','N4','N5','N6','N7'])
+# plt.ylabel('Cluster partition with covariate Y')
+# plt.xlabel('Cluster partition without covariate Y')
+# fig.savefig("C:/Users/Dingge/Desktop/results/cf_m.pdf", bbox_inches='tight')
 #
-# np.savetxt('cora_cl_A_k='+str(args.num_clusters)+'_p=16_'+str(args.use_nodes)+str(args.use_edges)+'.txt', pred_labels)
-#
-# np.savetxt('cora_mu_k='+str(args.num_clusters)+'_p=16_'+str(args.use_nodes)+str(args.use_edges)+'.txt', model.mu_k.cpu().data.numpy())
+disp = ConfusionMatrixDisplay(confusion_matrix=cf_m, display_labels=[0,1,2,3,4,5,6])
+disp.plot()

@@ -10,6 +10,9 @@ import args
 import pickle
 import embedding
 from gensim.corpora import Dictionary
+import preprocessing_etm
+from simu import *
+# from test_hep import *
 
 def parse_index_file(filename):
     index = []
@@ -23,21 +26,32 @@ def load_data(dataset):
         labels = np.loadtxt("data/Cora_enrich/cora_labels_int.txt")
 
         ########################## docs and vocab #################################
-        dct = pickle.load(open('data/Cora_enrich/dic_cora.pkl', 'rb'))
-        dctn = dct.token2id
-        V = len(dctn)
-
         with open("data/Cora_enrich/texts.txt", "r") as f:
             txts = f.readlines()
             txts = [x.strip("\n") for x in txts]
+        documents = txts
         docs = [x.split(' ') for x in txts]
+
+        vocabulary, train_dataset, _, = preprocessing_etm.create_etm_datasets(
+            documents,
+            min_df=0.01,  # 0.01
+            max_df=0.75,  # 0.75
+            train_size=1  # 0.85
+        )
+
+        corpus = [vocabulary]
+        dct = Dictionary(corpus)
+        # dct = pickle.load(open('data/Cora_enrich/dic_cora.pkl', 'rb'))
+        dctn = dct.token2id
+        V = len(dctn)
 
         # num version of docs
         ndocs = []
         for doc in range(len(docs)):
             tmp = []
             for word in docs[doc]:
-                tmp.append(dctn[word])
+                if word in dctn.keys():
+                    tmp.append(dctn[word])
             ndocs.append(tmp)
 
         # complete dtm
@@ -45,6 +59,8 @@ def load_data(dataset):
         for idx in range(len(ndocs)):
             cdtm.append(np.bincount(ndocs[idx], minlength=V))
         features = np.asarray(cdtm, dtype='float32')
+
+        label_text = labels
 
         ############################## embeddings ###################################
         with open('data/Cora_enrich/word2vec_model_1.pkl', 'rb') as f:
@@ -60,17 +76,19 @@ def load_data(dataset):
             # print(i, word)
             model_embeddings[i] = vectors[word]
 
-    elif dataset == 'simu2':
-        adjacency = np.loadtxt("data/SBM/adj_SBM_2.txt")
-        labels = np.loadtxt("data/SBM/label_SBM_2.txt")
+    elif dataset == 'simu1':
+        docs, adjacency, labels, label_text, dct = create_simu1(args.num_points, 3)
+
+        # adjacency = np.loadtxt("data/SBM/adj_SBM_1_pi=0.8.txt")
+        # labels = np.loadtxt("data/SBM/label_SBM_1.txt")
 
         ############## loading and manipulatind docs and vocabulary  ###############
-        dct = pickle.load(open('data/SBM/dic_BBC_2.pkl', 'rb'))
+        # dct = pickle.load(open('data/SBM/dic_BBC_1.pkl', 'rb'))
         dctn = dct.token2id
         V = len(dctn)
 
-        with open('data/SBM/sim_docs_SBM_2', 'rb') as fp:
-            docs = pickle.load(fp)
+        # with open('data/SBM/sim_docs_SBM_1', 'rb') as fp:
+        #     docs = pickle.load(fp)
 
         # num version of docs
         ndocs = []
@@ -87,15 +105,15 @@ def load_data(dataset):
         features = np.asarray(cdtm, dtype='float32')
 
         ####################### Training word2vec embeddings ######################
-        # documents = [" ".join(x) for x in docs]
-        # embeddings_mapping = embedding.create_word2vec_embedding_from_dataset(documents)
+        documents = [" ".join(x) for x in docs]
+        embeddings_mapping = embedding.create_word2vec_embedding_from_dataset(documents)
         # # Save embeddings for rho
         # with open('data/SBM/word2vec_SBM_1.pkl', 'wb') as fout:
         #     pickle.dump((embeddings_mapping), fout)
 
-        with open('data/SBM/word2vec_SBM_2.pkl', 'rb') as f:
-            embeddings = pickle.load(f)
-
+        # with open('data/SBM/word2vec_SBM_1.pkl', 'rb') as f:
+        #     embeddings = pickle.load(f)
+        embeddings = embeddings_mapping
         vectors = dict()
         key = embeddings.index2word
         value = embeddings.vectors
@@ -106,9 +124,12 @@ def load_data(dataset):
             # print(i, word)
             model_embeddings[i] = vectors[word]
 
-    return features, adjacency, labels, model_embeddings
+    # elif dataset == 'hep':
+    #     docs, adjacency, labels, label_text, dct = load_hep()
 
-def get_topics(beta, top_n_words=10):
+    return features, adjacency, labels, model_embeddings, label_text, dct
+
+def get_topics(beta, dct, top_n_words=10):
     """
     Gets topics. By default, returns the 10 most relevant terms for each topic.
     Parameters:
@@ -118,10 +139,10 @@ def get_topics(beta, top_n_words=10):
     ===
         list of str: topic list
     """
-    if args.dataset == 'simu2':
-        dct = pickle.load(open('data/SBM/dic_BBC_2.pkl', 'rb'))
-    elif args.dataset == 'cora':
-        dct = pickle.load(open('data/Cora_enrich/dic_cora.pkl', 'rb'))
+    # if args.dataset == 'simu1':
+    #     dct = pickle.load(open('data/SBM/dic_BBC_1.pkl', 'rb'))
+    # elif args.dataset == 'cora':
+    #     dct = pickle.load(open('data/Cora_enrich/dic_cora.pkl', 'rb'))
 
     topics = []
     for k in range(args.num_topics):

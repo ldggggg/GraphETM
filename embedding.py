@@ -42,6 +42,8 @@ def create_word2vec_embedding_from_dataset(
         Example:
             { 'water': nd.array([0.024187922, 0.053684134, 0.034520667, ... ]) }
     """
+    print("create word2vec embedding from dataset...........")
+
     assert isinstance(dataset, str) or isinstance(dataset, list), \
         'dataset must be file path or list of sentences'
 

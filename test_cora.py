@@ -48,6 +48,7 @@
 # np.savetxt(path + "cora_adj.txt", matrix)
 # np.savetxt(path + "cora_labels_int.txt", labels_int)
 
+
 import preprocessing
 
 path = 'C:/Users/Dingge/Documents/GitHub/GETM/data/Cora_enrich/'
@@ -58,6 +59,7 @@ with open(path + "texts.txt", "r") as f:
 
 documents = txts
 doc = [x.split(' ') for x in documents]
+
 
 # Preprocessing the dataset
 vocabulary, train_dataset, _, = preprocessing.create_etm_datasets(

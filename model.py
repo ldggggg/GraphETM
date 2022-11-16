@@ -35,10 +35,11 @@ class GraphConvSparse(nn.Module):
 
     def forward(self, inputs):
         x = inputs  # node features matrix X or hidden output
-        w = torch.mm(x, x.T)  # W2
+        # print("2", x.shape)
+        w = torch.mm(x, x.T)  # W2 dot product
         # x = torch.mm(x, self.weight)
         # x = torch.mm(self.adj, x)  # adj: N * N
-        x = torch.mul(w, self.adj.to_dense())  # adj: N * N
+        x = torch.mul(w, self.adj.to_dense())  # element-wise multiplication
         x = torch.mm(x, self.weight)
         outputs = self.activation(x)
         return outputs
@@ -52,6 +53,7 @@ class GraphConvNew(nn.Module):
 
     def forward(self, inputs):
         x = inputs
+        # print("1", x.shape)
         w = torch.mm(x, x.to_dense().T)  # W2
         # print(x)
         # sums = x.sum(1)
@@ -76,9 +78,14 @@ class Encoder(nn.Module):
         self.base_gcn = GraphConvNew(args.num_points, args.hidden1_dim, adj_norm)
         self.gcn_mean = GraphConvSparse(args.num_points, args.hidden2_dim, adj_norm, activation=lambda x: x)
         self.gcn_logstddev = GraphConvSparse(args.num_points, 1, adj_norm, activation=lambda x: x)
+        # self.gcn_mean = GraphConvSparse(args.hidden1_dim, args.hidden2_dim, adj_norm, activation=lambda x: x)
+        # self.gcn_logstddev = GraphConvSparse(args.hidden1_dim, 1, adj_norm, activation=lambda x: x)
+
+        self.dropout = nn.Dropout(0.5)
 
     def forward(self, X):
         hidden = self.base_gcn(X)
+        hidden = self.dropout(hidden)
         self.mean = self.gcn_mean(hidden)  # N * P
         self.logstd = self.gcn_logstddev(hidden)  # N * 1
         gaussian_noise = torch.randn(args.num_points, args.hidden2_dim)
@@ -134,7 +141,7 @@ class GETM(nn.Module):
         self.log_cov_k = nn.Parameter(torch.FloatTensor(args.num_clusters, 1).fill_(0.1), requires_grad=False)  # K
 
         # topic parameters
-        # self.rho = nn.Linear(args.rho_size, args.vocab_size, bias=False)  # V * L
+        # self.rho = nn.Linear(args.rho_size, args.vocab_size, bias=False)  # L * V
         self.rho = embeddings.clone().float()  # word2vec embeddings
         self.alpha = nn.Linear(args.rho_size, args.num_topics, bias=False)  # L * K
 
@@ -142,13 +149,15 @@ class GETM(nn.Module):
         self.w1 = nn.Linear(args.hidden2_dim, args.g_hidden_dim, bias=True)  # weights for graph embeddings
         self.w2 = nn.Linear(args.hidden2_dim, args.num_topics, bias=True)  # weights for topics
 
+        # self.tau = nn.Parameter(torch.tensor(0.5, dtype = torch.float32), requires_grad=True)
+
 
     # pre-train of graph embeddings Z to initialize parameters of cluster
     def pretrain(self, X, adj_label, labels):
         if not os.path.exists('./pretrain_model.pk'):
 
-            # when simu1: pi=0.6: weight_decay=1e-4; when simu1: pi>0.6: no weight_decay
-            optimizer = Adam(itertools.chain(self.encoder.parameters(), self.decoder1.parameters()), lr=args.pre_lr)
+            # when simu: weight_decay=1e-4;
+            optimizer = Adam(itertools.chain(self.encoder.parameters(), self.decoder1.parameters()), lr=args.pre_lr, weight_decay=1e-4)  # , weight_decay=1e-4
 
             store_pre_loss = torch.zeros(args.pre_epoch)
             for epoch in range(args.pre_epoch):
@@ -187,7 +196,7 @@ class GETM(nn.Module):
             self.gamma[positions] = 1.
             # print(self.gamma)
 
-            self.mu_k.data = torch.from_numpy(kmeans.cluster_centers_).float().to(device)  # need in simu2 !
+            self.mu_k.data = torch.from_numpy(kmeans.cluster_centers_).float().to(device)  # need in simu1_pi=0.8, simu2 !
 
             ################## gmm #################
             # gmm = GaussianMixture(n_components=args.num_clusters, covariance_type='diag')
@@ -208,38 +217,39 @@ class GETM(nn.Module):
             # print(self.gamma)
 
             # visu
-            labelC = []
-            for idx in range(len(labels)):
-                if labelk[idx] == 0:
-                    labelC.append('lightblue')
-                elif labelk[idx] == 1:
-                    labelC.append('lightgreen')
-                elif labelk[idx] == 2:
-                    labelC.append('yellow')
-                elif labelk[idx] == 3:
-                    labelC.append('pink')
-                elif labelk[idx] == 4:
-                    labelC.append('purple')
-                elif labelk[idx] == 5:
-                    labelC.append('red')
-                else:
-                    labelC.append('orange')
-            f, ax = plt.subplots(1, figsize=(15, 10))
-            ax.scatter(Z[:, 0], Z[:, 1], color=labelC)
-            plt.show()
+            # labelC = []
+            # for idx in range(len(labels)):
+            #     if labelk[idx] == 0:
+            #         labelC.append('lightblue')
+            #     elif labelk[idx] == 1:
+            #         labelC.append('lightgreen')
+            #     elif labelk[idx] == 2:
+            #         labelC.append('yellow')
+            #     elif labelk[idx] == 3:
+            #         labelC.append('pink')
+            #     elif labelk[idx] == 4:
+            #         labelC.append('purple')
+            #     elif labelk[idx] == 5:
+            #         labelC.append('red')
+            #     else:
+            #         labelC.append('orange')
+            # f, ax = plt.subplots(1, figsize=(15, 10))
+            # ax.scatter(Z[:, 0], Z[:, 1], color=labelC)
+            # plt.show()
 
             # torch.save(self.state_dict(), './pretrain_model.pk')
             print('Finish pretraining!')
 
         else:
+            print('Loading...............')
             self.load_state_dict(torch.load('./pretrain_model.pk'))
-            print('pi:', self.pi_k)
-            print('mu:', self.mu_k)
-            print('cov:', self.log_cov_k)
+            # print('pi:', self.pi_k)
+            # print('mu:', self.mu_k)
+            # print('cov:', self.log_cov_k)
 
     # Functions for the initialization of cluster parameters
     def update_gamma(self, mu_phi, log_cov_phi, pi_k, mu_k, log_cov_k, P):
-        det = 1e-10
+        det = 1e-16
         KL = torch.zeros((args.num_points, args.num_clusters), dtype = torch.float32)  # N * K
         KL = KL.to(device)
         for k in range(args.num_clusters):
@@ -250,7 +260,7 @@ class GETM(nn.Module):
                    + torch.norm(mu_K - mu_phi, dim=1, keepdim=True) ** 2 / torch.exp(log_cov_K)
             KL[:, k] = 0.5 * temp.squeeze()
         # print(KL)
-        denominator = torch.sum(pi_k.unsqueeze(0) * torch.exp(-KL), dim=1, dtype = torch.float32)
+        denominator = torch.sum(pi_k.unsqueeze(0) * torch.exp(-KL), dim=1, dtype = torch.float32) + det
         for k in range(args.num_clusters):
             self.gamma.data[:, k] = pi_k[k] * torch.exp(-KL[:, k]) / denominator + det
 
